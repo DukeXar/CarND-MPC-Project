@@ -11,9 +11,15 @@ class MPC {
   // const size_t m_n = 5;
   // const double m_refV = 50;
 
+  struct Result {
+    std::vector<double> x;
+    std::vector<double> y;
+    double steer;
+    double acc;
+  };
+
   // Solve the model given an initial state and polynomial coefficients.
-  // Return the first actuatotions.
-  std::vector<double> Solve(Eigen::VectorXd state, Eigen::VectorXd coeffs);
+  Result Solve(Eigen::VectorXd state, Eigen::VectorXd coeffs);
 };
 
 class Navigator {
@@ -31,7 +37,7 @@ class Navigator {
 
  private:
   MPC m_mpc;
-  std::vector<double> m_result;
+  MPC::Result m_result;
   std::vector<double> m_nextX;
   std::vector<double> m_nextY;
 };

@@ -73,7 +73,7 @@ int main() {
           // steering value back.
           // Otherwise the values will be in between [-deg2rad(25), deg2rad(25]
           // instead of [-1, 1].
-          msgJson["steering_angle"] = navigator.GetSteerValue() / deg2rad(25);
+          msgJson["steering_angle"] = -navigator.GetSteerValue() / deg2rad(25);
           msgJson["throttle"] = navigator.GetThrottleValue();
 
           // Display the MPC predicted trajectory

@@ -25,26 +25,18 @@ const double STEP_DT = 0.1;
 const size_t N_STEPS = 10;
 const double REF_V = 50;
 
+// 25 deg in rad
+const double MAX_STEER_IN_RAD = 0.436332;
+
 // Set the number of model variables (includes both states and inputs).
 // For example: If the state is a 4 element vector, the actuators is a 2
 // element vector and there are 10 timesteps. The number of variables is:
 // 4 * 10 + 2 * 9
-
 const size_t n_state = 6;
 const size_t n_vars = n_state * N_STEPS + 2 * (N_STEPS - 1);
 const size_t n_constraints = n_state * N_STEPS;
 
-const size_t x_start = 0;
-const size_t y_start = x_start + N_STEPS;
-const size_t psi_start = y_start + N_STEPS;
-const size_t v_start = psi_start + N_STEPS;
-const size_t cte_start = v_start + N_STEPS;
-const size_t psie_start = cte_start + N_STEPS;
-const size_t vars_end = psie_start + N_STEPS;
-
-const size_t steer_start = vars_end;
-const size_t acc_start = steer_start + (N_STEPS - 1);
-const size_t act_end = acc_start + (N_STEPS - 1);
+#define STATIC_ASSERT_EQUALS(v1, v2) static_assert(v1 == v2, #v1 " != " #v2)
 
 typedef CPPAD_TESTVECTOR(AD<double>) ADvector;
 
@@ -53,7 +45,7 @@ namespace {
 // Fit a polynomial.
 // Adapted from
 // https://github.com/JuliaMath/Polynomials.jl/blob/master/src/Polynomials.jl#L676-L716
-Eigen::VectorXd polyfit(Eigen::VectorXd xvals, Eigen::VectorXd yvals,
+Eigen::VectorXd Polyfit(Eigen::VectorXd xvals, Eigen::VectorXd yvals,
                         int order) {
   assert(xvals.size() == yvals.size());
   assert(order >= 1 && order <= xvals.size() - 1);
@@ -75,7 +67,7 @@ Eigen::VectorXd polyfit(Eigen::VectorXd xvals, Eigen::VectorXd yvals,
 }
 
 // Evaluate a polynomial.
-double polyeval(Eigen::VectorXd coeffs, double x) {
+double Polyeval(Eigen::VectorXd coeffs, double x) {
   double result = 0.0;
   for (int i = 0; i < coeffs.size(); i++) {
     result += coeffs[i] * pow(x, i);
@@ -83,7 +75,7 @@ double polyeval(Eigen::VectorXd coeffs, double x) {
   return result;
 }
 
-double polyevalDeriv(Eigen::VectorXd coeffs, double x) {
+double PolyevalDeriv(Eigen::VectorXd coeffs, double x) {
   double result = 0.0;
   for (int i = 1; i < coeffs.size(); ++i) {
     result += coeffs[i] * pow(x, i - 1) * i;
@@ -103,6 +95,21 @@ std::pair<double, double> GlobalToLocal(double x, double y, double x0,
 
 template <typename T>
 class VarsView {
+ private:
+  static const size_t x_start = 0;
+  static const size_t y_start = x_start + N_STEPS;
+  static const size_t psi_start = y_start + N_STEPS;
+  static const size_t v_start = psi_start + N_STEPS;
+  static const size_t cte_start = v_start + N_STEPS;
+  static const size_t psie_start = cte_start + N_STEPS;
+  static const size_t vars_end = psie_start + N_STEPS;
+
+  static const size_t steer_start = vars_end;
+  static const size_t acc_start = steer_start + (N_STEPS - 1);
+  static const size_t act_end = acc_start + (N_STEPS - 1);
+
+  STATIC_ASSERT_EQUALS(act_end, n_vars);
+
  public:
   typedef typename std::conditional<
       std::is_const<T>::value,
@@ -127,6 +134,11 @@ class VarsView {
   const size_t m_idx;
 };
 
+template <typename T>
+VarsView<T> GetView(T& v, size_t idx) {
+  return VarsView<T>(v, idx);
+}
+
 class FG_eval {
  public:
   typedef ADvector ADvector;
@@ -142,7 +154,7 @@ class FG_eval {
 
     // The part of the cost based on the reference state.
     for (int t = 0; t < m_nSteps; ++t) {
-      VarsView<const ADvector> view(vars, t);
+      auto view = GetView(vars, t);
       cost += CppAD::pow(view.cte(), 2);
       cost += CppAD::pow(view.psie(), 2);
       cost += CppAD::pow(view.v() - m_refV, 2);
@@ -150,15 +162,15 @@ class FG_eval {
 
     // Minimize the use of actuators.
     for (int t = 0; t < m_nSteps - 1; ++t) {
-      VarsView<const ADvector> view(vars, t);
+      auto view = GetView(vars, t);
       cost += CppAD::pow(view.steer(), 2);
       cost += CppAD::pow(view.acc(), 2);
     }
 
     // Minimize the value gap between sequential actuations.
     for (int t = 0; t < m_nSteps - 2; ++t) {
-      VarsView<const ADvector> view0(vars, t);
-      VarsView<const ADvector> view1(vars, t + 1);
+      auto view0 = GetView(vars, t);
+      auto view1 = GetView(vars, t + 1);
       cost += CppAD::pow(view0.steer() - view1.steer(), 2);
       cost += CppAD::pow(view0.acc() - view1.acc(), 2);
     }
@@ -166,8 +178,8 @@ class FG_eval {
     fg[0] = cost;
 
     {
-      VarsView<ADvector> viewfg(fg, 1);
-      VarsView<const ADvector> viewv(vars, 0);
+      auto viewfg = GetView(fg, 1);
+      auto viewv = GetView(vars, 0);
       viewfg.x() = viewv.x();
       viewfg.y() = viewv.y();
       viewfg.psi() = viewv.psi();
@@ -177,9 +189,9 @@ class FG_eval {
     }
 
     for (int t = 1; t < m_nSteps; ++t) {
-      VarsView<const ADvector> view0(vars, t - 1);
-      VarsView<const ADvector> view1(vars, t);
-      VarsView<ADvector> viewfg(fg, t + 1);
+      auto view0 = GetView(vars, t - 1);
+      auto view1 = GetView(vars, t);
+      auto viewfg = GetView(fg, t + 1);
 
       AD<double> f0 = m_coeffs[0] + m_coeffs[1] * view0.x() +
                       m_coeffs[2] * view0.x() * view0.x() +
@@ -220,11 +232,8 @@ class FG_eval {
   double m_refV;
 };
 
-std::vector<double> MPC::Solve(Eigen::VectorXd state, Eigen::VectorXd coeffs) {
+MPC::Result MPC::Solve(Eigen::VectorXd state, Eigen::VectorXd coeffs) {
   typedef CPPAD_TESTVECTOR(double) Dvector;
-
-  // FIXME(dukexar): ???
-  const size_t n_steps = N_STEPS;
 
   const double x = state[0];
   const double y = state[1];
@@ -240,32 +249,30 @@ std::vector<double> MPC::Solve(Eigen::VectorXd state, Eigen::VectorXd coeffs) {
     vars[i] = 0.0;
   }
 
-  vars[x_start] = x;
-  vars[y_start] = y;
-  vars[psi_start] = psi;
-  vars[v_start] = v;
-  vars[cte_start] = cte;
-  vars[psie_start] = psie;
+  auto varsView = GetView(vars, 0);
+  varsView.x() = x;
+  varsView.y() = y;
+  varsView.psi() = psi;
+  varsView.v() = v;
+  varsView.cte() = cte;
+  varsView.psie() = psie;
 
   Dvector vars_lowerbound(n_vars);
   Dvector vars_upperbound(n_vars);
 
-  // Variables limits
-  for (int i = 0; i < vars_end; ++i) {
-    vars_lowerbound[i] = -1e19;  // std::numeric_limits<double>::min();
-    vars_upperbound[i] = 1e19;   // std::numeric_limits<double>::max();
+  // Variables limits, just fill everything and fix actuators later.
+  for (int i = 0; i < n_vars; ++i) {
+    // NOTE: Don't set to std::numeric_limits<double>::min()/max();
+    vars_lowerbound[i] = -1e19;
+    vars_upperbound[i] = 1e19;
   }
 
-  // Steering limits
-  for (int i = 0; i < (n_steps - 1); ++i) {
-    vars_lowerbound[steer_start + i] = -0.436332;  // -25 deg in rad
-    vars_upperbound[steer_start + i] = 0.436332;   // +25 deg in rad
-  }
-
-  // Throttle/accelleration limits
-  for (int i = 0; i < (n_steps - 1); ++i) {
-    vars_lowerbound[acc_start + i] = -1.0;
-    vars_upperbound[acc_start + i] = 1.0;
+  // Actuators limits.
+  for (int i = 0; i < (N_STEPS - 1); ++i) {
+    GetView(vars_lowerbound, i).steer() = -MAX_STEER_IN_RAD;
+    GetView(vars_upperbound, i).steer() = MAX_STEER_IN_RAD;
+    GetView(vars_lowerbound, i).acc() = -1.0;
+    GetView(vars_upperbound, i).acc() = 1.0;
   }
 
   // Lower and upper limits for the constraints
@@ -278,18 +285,20 @@ std::vector<double> MPC::Solve(Eigen::VectorXd state, Eigen::VectorXd coeffs) {
   }
 
   // Simply fix original values
-  constraints_lowerbound[x_start] = x;
-  constraints_upperbound[x_start] = x;
-  constraints_lowerbound[y_start] = y;
-  constraints_upperbound[y_start] = y;
-  constraints_lowerbound[psi_start] = psi;
-  constraints_upperbound[psi_start] = psi;
-  constraints_lowerbound[v_start] = v;
-  constraints_upperbound[v_start] = v;
-  constraints_lowerbound[cte_start] = cte;
-  constraints_upperbound[cte_start] = cte;
-  constraints_lowerbound[psie_start] = psie;
-  constraints_upperbound[psie_start] = psie;
+  auto clbView = GetView(constraints_lowerbound, 0);
+  auto cubView = GetView(constraints_upperbound, 0);
+  clbView.x() = x;
+  cubView.x() = x;
+  clbView.y() = y;
+  cubView.y() = y;
+  clbView.psi() = psi;
+  cubView.psi() = psi;
+  clbView.v() = v;
+  cubView.v() = v;
+  clbView.cte() = cte;
+  cubView.cte() = cte;
+  clbView.psie() = psie;
+  cubView.psie() = psie;
 
   /*
   std::cout << "Vars lowerbound: " << vars_lowerbound << std::endl;
@@ -300,7 +309,7 @@ std::vector<double> MPC::Solve(Eigen::VectorXd state, Eigen::VectorXd coeffs) {
   */
 
   // object that computes objective and constraints
-  FG_eval fg_eval(coeffs, n_steps, REF_V);
+  FG_eval fg_eval(coeffs, N_STEPS, REF_V);
 
   //
   // NOTE: You don't have to worry about these options
@@ -336,59 +345,65 @@ std::vector<double> MPC::Solve(Eigen::VectorXd state, Eigen::VectorXd coeffs) {
   }
 
   // Cost
-  auto cost = solution.obj_value;
+  const auto cost = solution.obj_value;
   std::cout << "Cost " << cost << std::endl;
 
-  const auto& sx = solution.x;
-  std::cout << "Result: " << sx[steer_start] << ", " << sx[acc_start]
+  std::vector<double> resX, resY;
+  for (size_t i = 0; i < N_STEPS; ++i) {
+    resX.push_back(GetView(solution.x, i).x());
+    resY.push_back(GetView(solution.x, i).y());
+  }
+
+  auto actView = GetView(solution.x, 0);
+
+  std::cout << "Result: " << actView.steer() << ", " << actView.acc()
             << std::endl;
-  return {sx[steer_start], sx[acc_start]};
+
+  return Result{resX, resY, actView.steer(), actView.acc()};
 }
 
 void Navigator::Update(const std::vector<double>& ptsx,
                        const std::vector<double>& ptsy, double px, double py,
                        double psi, double speed) {
+  // Convert from global coorinate system to local (car's) one to simplify
+  // further calculations.
   Eigen::VectorXd ptsxLocal(ptsx.size());
   Eigen::VectorXd ptsyLocal(ptsy.size());
 
   for (int i = 0; i < ptsx.size(); ++i) {
-    auto xy = GlobalToLocal(ptsx[i], ptsy[i], px, py, psi);
+    const auto xy = GlobalToLocal(ptsx[i], ptsy[i], px, py, psi);
     ptsxLocal[i] = xy.first;
     ptsyLocal[i] = xy.second;
   }
 
-  auto coeffs = polyfit(ptsxLocal, ptsyLocal, 3);
-  double cte = polyeval(coeffs, 0);
-
-  // derivative of coeffs[0] + coeffs[1] * x -> coeffs[1]
-  double psie = -atan(polyevalDeriv(coeffs, 0));
+  // Fit a polinomial for desired vaypoints.
+  const auto coeffs = Polyfit(ptsxLocal, ptsyLocal, 3);
+  // As we are in local coordinate system, cross track error is just f(0).
+  const double cte = Polyeval(coeffs, 0);
+  // psie = psi - angle at 0. psi in local coordinates is just 0
+  const double psie = 0 - atan(PolyevalDeriv(coeffs, 0));
   Eigen::VectorXd state(n_state);
   state << 0, 0, 0, speed, cte, psie;
 
-  std::cout << "State: " << state << std::endl;
-
   m_result = m_mpc.Solve(state, coeffs);
 
-  // std::cout << "Result: " << m_result << std::endl;
-
-  // FIXME(dukexar): These should have the values you would get after
-  // calculating polyeval on way points going forward.
-  m_nextX = std::vector<double>(ptsxLocal.size());
-  m_nextY = std::vector<double>(ptsyLocal.size());
-  for (size_t i = 0; i < ptsxLocal.size(); ++i) {
-    m_nextX[i] = ptsxLocal[i];
-    m_nextY[i] = ptsyLocal[i];
+  // This is how we planned the car should drive.
+  m_nextX = std::vector<double>(N_STEPS, 0);
+  m_nextY = m_nextX;
+  for (size_t i = 0; i < m_nextX.size(); ++i) {
+    m_nextX[i] = i * speed * STEP_DT;
+    m_nextY[i] = Polyeval(coeffs, m_nextX[i]);
   }
 }
 
-std::vector<double> Navigator::GetMpcXVals() const { return {}; }
+std::vector<double> Navigator::GetMpcXVals() const { return m_result.x; }
 
-std::vector<double> Navigator::GetMpcYVals() const { return {}; }
+std::vector<double> Navigator::GetMpcYVals() const { return m_result.y; }
 
 std::vector<double> Navigator::GetNextXVals() const { return m_nextX; }
 
 std::vector<double> Navigator::GetNextYVals() const { return m_nextY; }
 
-double Navigator::GetSteerValue() const { return -m_result[0]; }
+double Navigator::GetSteerValue() const { return m_result.steer; }
 
-double Navigator::GetThrottleValue() const { return m_result[1]; }
+double Navigator::GetThrottleValue() const { return m_result.acc; }
