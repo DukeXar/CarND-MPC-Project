@@ -19,24 +19,15 @@ using CppAD::AD;
 // This is the length from front to CoG that has a similar radius.
 const double Lf = 2.67;
 
-// Observation: when this is 5 and dt is 0.2, car steers outside of the lane and
-// stays there, while driving parallel to the main road.
-const double STEP_DT = 0.1;
-const size_t N_STEPS = 10;
-const double REF_V = 50;
+// The following two are really hardcoded, as they are tightly coupled with
+// model functions.
+// Number of actuators.
+const size_t N_ACTUATORS = 2;
+// Number of state variables.
+const size_t N_STATE = 6;
 
 // 25 deg in rad
 const double MAX_STEER_IN_RAD = 0.436332;
-
-// Set the number of model variables (includes both states and inputs).
-// For example: If the state is a 4 element vector, the actuators is a 2
-// element vector and there are 10 timesteps. The number of variables is:
-// 4 * 10 + 2 * 9
-const size_t n_state = 6;
-const size_t n_vars = n_state * N_STEPS + 2 * (N_STEPS - 1);
-const size_t n_constraints = n_state * N_STEPS;
-
-#define STATIC_ASSERT_EQUALS(v1, v2) static_assert(v1 == v2, #v1 " != " #v2)
 
 typedef CPPAD_TESTVECTOR(AD<double>) ADvector;
 
@@ -89,27 +80,13 @@ std::pair<double, double> GlobalToLocal(double x, double y, double x0,
   double ty = y - y0;
   double lx = tx * cos(psi) - ty * sin(psi);
   double ly = tx * sin(psi) + ty * cos(psi);
-  return make_pair(lx, ly);
+  return std::make_pair(lx, ly);
 }
 }  // namespace
 
+// Helper wrapper to not do index math everywhere.
 template <typename T>
 class VarsView {
- private:
-  static const size_t x_start = 0;
-  static const size_t y_start = x_start + N_STEPS;
-  static const size_t psi_start = y_start + N_STEPS;
-  static const size_t v_start = psi_start + N_STEPS;
-  static const size_t cte_start = v_start + N_STEPS;
-  static const size_t psie_start = cte_start + N_STEPS;
-  static const size_t vars_end = psie_start + N_STEPS;
-
-  static const size_t steer_start = vars_end;
-  static const size_t acc_start = steer_start + (N_STEPS - 1);
-  static const size_t act_end = acc_start + (N_STEPS - 1);
-
-  STATIC_ASSERT_EQUALS(act_end, n_vars);
-
  public:
   typedef typename std::conditional<
       std::is_const<T>::value,
@@ -117,7 +94,9 @@ class VarsView {
       typename std::remove_const<typename T::value_type>::type>::type
       value_type;
 
-  VarsView(T& v, size_t idx) : m_v(v), m_idx(idx) {}
+  // Constructs the view, wrapping container v starting at offset idx
+  VarsView(T& v, size_t idx, size_t nSteps)
+      : m_v(v), m_idx(idx), m_nSteps(nSteps) {}
 
   value_type& x() { return m_v[x_start + m_idx]; }
   value_type& y() { return m_v[y_start + m_idx]; }
@@ -132,24 +111,55 @@ class VarsView {
  private:
   T& m_v;
   const size_t m_idx;
+  const size_t m_nSteps;
+
+  const size_t x_start = 0;
+  const size_t y_start = x_start + m_nSteps;
+  const size_t psi_start = y_start + m_nSteps;
+  const size_t v_start = psi_start + m_nSteps;
+  const size_t cte_start = v_start + m_nSteps;
+  const size_t psie_start = cte_start + m_nSteps;
+  const size_t vars_end = psie_start + m_nSteps;
+
+  const size_t steer_start = vars_end;
+  const size_t acc_start = steer_start + (m_nSteps - 1);
+  const size_t act_end = acc_start + (m_nSteps - 1);
 };
 
+namespace {
+
 template <typename T>
-VarsView<T> GetView(T& v, size_t idx) {
-  return VarsView<T>(v, idx);
+VarsView<T> GetView(T& v, size_t idx, size_t nSteps) {
+  return VarsView<T>(v, idx, nSteps);
 }
 
+}  // namespace
+
+// A functor which is used by ipopt solver to estimate actuators' forces based
+// on input measurements and car motion model.
 class FG_eval {
+ private:
+  template <typename T>
+  VarsView<T> GetView(T& v, size_t idx) {
+    return ::GetView(v, idx, m_nSteps);
+  }
+
  public:
   typedef ADvector ADvector;
 
-  explicit FG_eval(Eigen::VectorXd coeffs, size_t nSteps, double refV)
-      : m_coeffs(coeffs), m_nSteps(nSteps), m_refV(refV) {}
+  // Constructs a functor.
+  // @param coeffs are 3rd-order polynomial coefficients of the target
+  //               trajectory function.
+  // @param nSteps is number of steps to calculate into future.
+  // @param refV is a reference velocity of a car.
+  // @param stepDt is a time delta in seconds between steps.
+  FG_eval(Eigen::VectorXd coeffs, size_t nSteps, double refV, double stepDt)
+      : m_coeffs(coeffs), m_nSteps(nSteps), m_refV(refV), m_stepDt(stepDt) {}
 
+  // Interface for ipopt.
+  // @param fg is a vector of the cost constraints.
+  // @param vars is a vector of variable values (state & actuators).
   void operator()(ADvector& fg, const ADvector& vars) {
-    // `fg` a vector of the cost constraints, `vars` is a vector of variable
-    // values (state & actuators)
-
     AD<double> cost = 0;
 
     // The part of the cost based on the reference state.
@@ -188,6 +198,8 @@ class FG_eval {
       viewfg.psie() = viewv.psie();
     }
 
+    // Evaluate the model into m_nSteps in future.
+
     for (int t = 1; t < m_nSteps; ++t) {
       auto view0 = GetView(vars, t - 1);
       auto view1 = GetView(vars, t);
@@ -202,38 +214,47 @@ class FG_eval {
 
       // x_[t+1] = x[t] + v[t] * cos(psi[t]) * dt
       viewfg.x() = view1.x() -
-                   (view0.x() + view0.v() * CppAD::cos(view0.psi()) * STEP_DT);
+                   (view0.x() + view0.v() * CppAD::cos(view0.psi()) * m_stepDt);
 
       // y_[t+1] = y[t] + v[t] * sin(psi[t]) * dt
       viewfg.y() = view1.y() -
-                   (view0.y() + view0.v() * CppAD::sin(view0.psi()) * STEP_DT);
+                   (view0.y() + view0.v() * CppAD::sin(view0.psi()) * m_stepDt);
 
       // psi_[t+1] = psi[t] + v[t] / Lf * delta[t] * dt
       viewfg.psi() = view1.psi() -
-                     (view0.psi() + view0.v() * view0.steer() / Lf * STEP_DT);
+                     (view0.psi() + view0.v() * view0.steer() / Lf * m_stepDt);
 
       // v_[t+1] = v[t] + a[t] * dt
-      viewfg.v() = view1.v() - (view0.v() + view0.acc() * STEP_DT);
+      viewfg.v() = view1.v() - (view0.v() + view0.acc() * m_stepDt);
 
       // cte[t+1] = f(x[t]) - y[t] + v[t] * sin(epsi[t]) * dt
       viewfg.cte() =
           view1.cte() -
-          (f0 - view0.y() + view0.v() * CppAD::sin(view0.psie()) * STEP_DT);
+          (f0 - view0.y() + view0.v() * CppAD::sin(view0.psie()) * m_stepDt);
 
       // epsi[t+1] = psi[t] - psides[t] + v[t] * delta[t] / Lf * dt
-      viewfg.psie() = view1.psie() - ((view0.psi() - psides0) +
-                                      view0.v() * view0.steer() / Lf * STEP_DT);
+      viewfg.psie() =
+          view1.psie() -
+          ((view0.psi() - psides0) + view0.v() * view0.steer() / Lf * m_stepDt);
     }
   }
 
  private:
   const Eigen::VectorXd m_coeffs;
-  size_t m_nSteps;
-  double m_refV;
+  const size_t m_nSteps;
+  const double m_refV;
+  const double m_stepDt;
 };
 
 MPC::Result MPC::Solve(Eigen::VectorXd state, Eigen::VectorXd coeffs) {
   typedef CPPAD_TESTVECTOR(double) Dvector;
+
+  // Set the number of model variables (includes both states and inputs).
+  // For example: If the state is a 4 element vector, the actuators is a 2
+  // element vector and there are 10 timesteps. The number of variables is:
+  // 4 * 10 + 2 * 9
+  const size_t n_vars = N_STATE * m_nSteps + N_ACTUATORS * (m_nSteps - 1);
+  const size_t n_constraints = N_STATE * m_nSteps;
 
   const double x = state[0];
   const double y = state[1];
@@ -249,7 +270,7 @@ MPC::Result MPC::Solve(Eigen::VectorXd state, Eigen::VectorXd coeffs) {
     vars[i] = 0.0;
   }
 
-  auto varsView = GetView(vars, 0);
+  auto varsView = GetView(vars, 0, m_nSteps);
   varsView.x() = x;
   varsView.y() = y;
   varsView.psi() = psi;
@@ -268,11 +289,11 @@ MPC::Result MPC::Solve(Eigen::VectorXd state, Eigen::VectorXd coeffs) {
   }
 
   // Actuators limits.
-  for (int i = 0; i < (N_STEPS - 1); ++i) {
-    GetView(vars_lowerbound, i).steer() = -MAX_STEER_IN_RAD;
-    GetView(vars_upperbound, i).steer() = MAX_STEER_IN_RAD;
-    GetView(vars_lowerbound, i).acc() = -1.0;
-    GetView(vars_upperbound, i).acc() = 1.0;
+  for (int i = 0; i < (m_nSteps - 1); ++i) {
+    GetView(vars_lowerbound, i, m_nSteps).steer() = -MAX_STEER_IN_RAD;
+    GetView(vars_upperbound, i, m_nSteps).steer() = MAX_STEER_IN_RAD;
+    GetView(vars_lowerbound, i, m_nSteps).acc() = -1.0;
+    GetView(vars_upperbound, i, m_nSteps).acc() = 1.0;
   }
 
   // Lower and upper limits for the constraints
@@ -284,9 +305,9 @@ MPC::Result MPC::Solve(Eigen::VectorXd state, Eigen::VectorXd coeffs) {
     constraints_upperbound[i] = 0;
   }
 
-  // Simply fix original values
-  auto clbView = GetView(constraints_lowerbound, 0);
-  auto cubView = GetView(constraints_upperbound, 0);
+  // Simply fix original values.
+  auto clbView = GetView(constraints_lowerbound, 0, m_nSteps);
+  auto cubView = GetView(constraints_upperbound, 0, m_nSteps);
   clbView.x() = x;
   cubView.x() = x;
   clbView.y() = y;
@@ -309,58 +330,49 @@ MPC::Result MPC::Solve(Eigen::VectorXd state, Eigen::VectorXd coeffs) {
   */
 
   // object that computes objective and constraints
-  FG_eval fg_eval(coeffs, N_STEPS, REF_V);
+  FG_eval fg_eval(coeffs, m_nSteps, m_refV, m_stepDt);
 
-  //
-  // NOTE: You don't have to worry about these options
-  //
-  // options for IPOPT solver
   std::string options;
   // Uncomment this if you'd like more print information
   options += "Integer print_level  0\n";
   // NOTE: Setting sparse to true allows the solver to take advantage
-  // of sparse routines, this makes the computation MUCH FASTER. If you
-  // can uncomment 1 of these and see if it makes a difference or not but
-  // if you uncomment both the computation time should go up in orders of
-  // magnitude.
+  // of sparse routines, this makes the computation MUCH FASTER.
   options += "Sparse  true        forward\n";
   options += "Sparse  true        reverse\n";
   // NOTE: Currently the solver has a maximum time limit of 0.5 seconds.
   // Change this as you see fit.
   options += "Numeric max_cpu_time          0.5\n";
 
-  // place to return solution
   CppAD::ipopt::solve_result<Dvector> solution;
-
-  // solve the problem
   CppAD::ipopt::solve<Dvector, FG_eval>(
       options, vars, vars_lowerbound, vars_upperbound, constraints_lowerbound,
       constraints_upperbound, fg_eval, solution);
 
   if (solution.status != CppAD::ipopt::solve_result<Dvector>::success) {
-    // FIXME(dukexar): WTF?
-    std::cout
-        << "Solution status is not success! Ouch, how it could be? status="
-        << solution.status << std::endl;
+    std::cout << "Solution status is not success! Ouch, how it could be? 99% "
+                 "you have a bug in your code. status="
+              << solution.status << std::endl;
   }
 
-  // Cost
-  const auto cost = solution.obj_value;
-  std::cout << "Cost " << cost << std::endl;
+  // const auto cost = solution.obj_value;
+  // std::cout << "Cost " << cost << std::endl;
 
   std::vector<double> resX, resY;
-  for (size_t i = 0; i < N_STEPS; ++i) {
-    resX.push_back(GetView(solution.x, i).x());
-    resY.push_back(GetView(solution.x, i).y());
+  for (size_t i = 0; i < m_nSteps; ++i) {
+    resX.push_back(GetView(solution.x, i, m_nSteps).x());
+    resY.push_back(GetView(solution.x, i, m_nSteps).y());
   }
 
-  auto actView = GetView(solution.x, 0);
+  auto actView = GetView(solution.x, 0, m_nSteps);
 
-  std::cout << "Result: " << actView.steer() << ", " << actView.acc()
-            << std::endl;
+  // std::cout << "Result: " << actView.steer() << ", " << actView.acc()
+  //          << std::endl;
 
   return Result{resX, resY, actView.steer(), actView.acc()};
 }
+
+Navigator::Navigator(double refV, double stepDt, size_t nSteps)
+    : m_stepDt(stepDt), m_nSteps(nSteps), m_mpc(refV, stepDt, nSteps) {}
 
 void Navigator::Update(const std::vector<double>& ptsx,
                        const std::vector<double>& ptsy, double px, double py,
@@ -382,16 +394,16 @@ void Navigator::Update(const std::vector<double>& ptsx,
   const double cte = Polyeval(coeffs, 0);
   // psie = psi - angle at 0. psi in local coordinates is just 0
   const double psie = 0 - atan(PolyevalDeriv(coeffs, 0));
-  Eigen::VectorXd state(n_state);
+  Eigen::VectorXd state(N_STATE);
   state << 0, 0, 0, speed, cte, psie;
 
   m_result = m_mpc.Solve(state, coeffs);
 
   // This is how we planned the car should drive.
-  m_nextX = std::vector<double>(N_STEPS, 0);
+  m_nextX = std::vector<double>(m_nSteps, 0);
   m_nextY = m_nextX;
   for (size_t i = 0; i < m_nextX.size(); ++i) {
-    m_nextX[i] = i * speed * STEP_DT;
+    m_nextX[i] = i * speed * m_stepDt;
     m_nextY[i] = Polyeval(coeffs, m_nextX[i]);
   }
 }
