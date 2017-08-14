@@ -155,8 +155,8 @@ class FG_eval {
     // The part of the cost based on the reference state.
     for (int t = 0; t < m_nSteps; ++t) {
       auto view = GetView(vars, t);
-      cost += CppAD::pow(view.cte(), 2);
-      cost += CppAD::pow(view.psie(), 2);
+      cost += 1000 * CppAD::pow(view.cte(), 2);
+      cost += 1000 * CppAD::pow(view.psie(), 2);
       cost += CppAD::pow(view.v() - m_refV, 2);
     }
 
