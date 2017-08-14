@@ -4,6 +4,27 @@
 #include <vector>
 #include "Eigen-3.3/Eigen/Core"
 
+// Represents set of penalties - weights of errors in the cost function.
+struct Penalties {
+  Penalties()
+      : cte(1), psie(1), v(1), steer(1), acc(1), steer_gap(1), acc_gap(1) {}
+
+  // Weight of the cross track error.
+  double cte;
+  // Weight of the psi error.
+  double psie;
+  // Weight of the velocity error.
+  double v;
+  // Weight of the stering actuator.
+  double steer;
+  // Weight of the acceleration actuator.
+  double acc;
+  // Weight of the gap between sequential activations for steering.
+  double steer_gap;
+  // Weight of ... for acceleration.
+  double acc_gap;
+};
+
 class MPC {
  public:
   struct Result {
@@ -21,8 +42,12 @@ class MPC {
   // @param refV is reference velocity.
   // @param stepDt is time delta between steps, in seconds.
   // @param nSteps is number of steps to evaluate.
-  MPC(double refV, double stepDt, size_t nSteps)
-      : m_refV(refV), m_stepDt(stepDt), m_nSteps(nSteps) {}
+  // @param penalties is a value for pealties for the model.
+  MPC(double refV, double stepDt, size_t nSteps, const Penalties &penalties)
+      : m_refV(refV),
+        m_stepDt(stepDt),
+        m_nSteps(nSteps),
+        m_penalties(penalties) {}
 
   // Solve the model given an initial state and polynomial coefficients.
   Result Solve(Eigen::VectorXd state, Eigen::VectorXd coeffs);
@@ -31,11 +56,13 @@ class MPC {
   const double m_refV;
   const double m_stepDt;
   const size_t m_nSteps;
+  const Penalties m_penalties;
 };
 
 class Navigator {
  public:
-  Navigator(double refV, double stepDt, size_t nSteps);
+  Navigator(double refV, double stepDt, size_t nSteps,
+            const Penalties &penalties);
 
   void Update(const std::vector<double> &ptsx, const std::vector<double> &ptsy,
               double px, double py, double psi, double speed);

@@ -153,8 +153,13 @@ class FG_eval {
   // @param nSteps is number of steps to calculate into future.
   // @param refV is a reference velocity of a car.
   // @param stepDt is a time delta in seconds between steps.
-  FG_eval(Eigen::VectorXd coeffs, size_t nSteps, double refV, double stepDt)
-      : m_coeffs(coeffs), m_nSteps(nSteps), m_refV(refV), m_stepDt(stepDt) {}
+  FG_eval(Eigen::VectorXd coeffs, size_t nSteps, double refV, double stepDt,
+          const Penalties& penalties)
+      : m_coeffs(coeffs),
+        m_nSteps(nSteps),
+        m_refV(refV),
+        m_stepDt(stepDt),
+        m_penalties(penalties) {}
 
   // Interface for ipopt.
   // @param fg is a vector of the cost constraints.
@@ -165,24 +170,27 @@ class FG_eval {
     // The part of the cost based on the reference state.
     for (int t = 0; t < m_nSteps; ++t) {
       auto view = GetView(vars, t);
-      cost += 1000 * CppAD::pow(view.cte(), 2);
-      cost += 1000 * CppAD::pow(view.psie(), 2);
-      cost += CppAD::pow(view.v() - m_refV, 2);
+      cost += m_penalties.cte * CppAD::pow(view.cte(), 2);
+      cost += m_penalties.psie * CppAD::pow(view.psie(), 2);
+      AD<double> dv = view.v() - m_refV;
+      cost += m_penalties.v * CppAD::pow(dv, 2);
     }
 
     // Minimize the use of actuators.
     for (int t = 0; t < m_nSteps - 1; ++t) {
       auto view = GetView(vars, t);
-      cost += CppAD::pow(view.steer(), 2);
-      cost += CppAD::pow(view.acc(), 2);
+      cost += m_penalties.steer * CppAD::pow(view.steer(), 2);
+      cost += m_penalties.acc * CppAD::pow(view.acc(), 2);
     }
 
     // Minimize the value gap between sequential actuations.
     for (int t = 0; t < m_nSteps - 2; ++t) {
       auto view0 = GetView(vars, t);
       auto view1 = GetView(vars, t + 1);
-      cost += CppAD::pow(view0.steer() - view1.steer(), 2);
-      cost += CppAD::pow(view0.acc() - view1.acc(), 2);
+      AD<double> dsteer = view0.steer() - view1.steer();
+      cost += m_penalties.steer_gap * CppAD::pow(dsteer, 2);
+      AD<double> dacc = view0.acc() - view1.acc();
+      cost += m_penalties.acc_gap * CppAD::pow(dacc, 2);
     }
 
     fg[0] = cost;
@@ -244,6 +252,7 @@ class FG_eval {
   const size_t m_nSteps;
   const double m_refV;
   const double m_stepDt;
+  const Penalties m_penalties;
 };
 
 MPC::Result MPC::Solve(Eigen::VectorXd state, Eigen::VectorXd coeffs) {
@@ -330,7 +339,7 @@ MPC::Result MPC::Solve(Eigen::VectorXd state, Eigen::VectorXd coeffs) {
   */
 
   // object that computes objective and constraints
-  FG_eval fg_eval(coeffs, m_nSteps, m_refV, m_stepDt);
+  FG_eval fg_eval(coeffs, m_nSteps, m_refV, m_stepDt, m_penalties);
 
   std::string options;
   // Uncomment this if you'd like more print information
@@ -371,8 +380,11 @@ MPC::Result MPC::Solve(Eigen::VectorXd state, Eigen::VectorXd coeffs) {
   return Result{resX, resY, actView.steer(), actView.acc()};
 }
 
-Navigator::Navigator(double refV, double stepDt, size_t nSteps)
-    : m_stepDt(stepDt), m_nSteps(nSteps), m_mpc(refV, stepDt, nSteps) {}
+Navigator::Navigator(double refV, double stepDt, size_t nSteps,
+                     const Penalties& penalties)
+    : m_stepDt(stepDt),
+      m_nSteps(nSteps),
+      m_mpc(refV, stepDt, nSteps, penalties) {}
 
 void Navigator::Update(const std::vector<double>& ptsx,
                        const std::vector<double>& ptsy, double px, double py,

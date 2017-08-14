@@ -47,7 +47,11 @@ int main() {
   // N_STEPS * STEP_DT = 1 (second) - this is how far in future model would
   // look.
 
-  Navigator navigator(REF_V, STEP_DT, N_STEPS);
+  Penalties penalties;
+  penalties.cte = 1000;
+  penalties.psie = 1000;
+
+  Navigator navigator(REF_V, STEP_DT, N_STEPS, penalties);
 
   h.onMessage([&navigator](uWS::WebSocket<uWS::SERVER> ws, char *data,
                            size_t length, uWS::OpCode opCode) {
