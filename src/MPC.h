@@ -25,6 +25,7 @@ struct Penalties {
   double acc_gap;
 };
 
+// Model Predictive Control controller.
 class MPC {
  public:
   struct Result {
@@ -38,7 +39,7 @@ class MPC {
     double acc;
   };
 
-  // Constructs MPC evaluator.
+  // Constructs MPC controller.
   // @param refV is reference velocity.
   // @param stepDt is time delta between steps, in seconds.
   // @param nSteps is number of steps to evaluate.
@@ -59,8 +60,11 @@ class MPC {
   const Penalties m_penalties;
 };
 
+// Navigator is a wrapper over MPC that provides a shim between Udacity
+// simulator measurements and actuators and MPC model.
 class Navigator {
  public:
+  // Constructs navigator.
   Navigator(double refV, double stepDt, size_t nSteps,
             const Penalties &penalties);
 
