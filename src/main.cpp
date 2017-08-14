@@ -48,8 +48,8 @@ int main() {
   // look.
 
   Penalties penalties;
-  penalties.cte = 1000;
-  penalties.psie = 1000;
+  penalties.cte = 1500;
+  penalties.psie = 1500;
 
   Navigator navigator(REF_V, STEP_DT, N_STEPS, penalties);
 
