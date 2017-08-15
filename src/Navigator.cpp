@@ -67,9 +67,6 @@ void Navigator::Update(const std::vector<double>& ptsx,
                        const std::vector<double>& ptsy, double px, double py,
                        double psi, double speed, double steer,
                        double throttle) {
-  // TODO(dukexar): Yes, it is silly to negate back, but we need to apply model
-  // here.
-  // steer = -steer;
   // x_[t+1] = x[t] + v[t] * cos(psi[t]) * dt
   const double corrX = px + speed * cos(psi) * m_latency;
   // y_[t+1] = y[t] + v[t] * sin(psi[t]) * dt
@@ -112,7 +109,7 @@ void Navigator::Update(const std::vector<double>& ptsx,
   m_nextX = std::vector<double>(m_nSteps, 0);
   m_nextY = m_nextX;
   for (size_t i = 0; i < m_nextX.size(); ++i) {
-    m_nextX[i] = i * m_stepDt * 10;  // i * speed * m_stepDt;
+    m_nextX[i] = i * speed * m_stepDt;
     m_nextY[i] = Polyeval(coeffs, m_nextX[i]);
   }
 }
