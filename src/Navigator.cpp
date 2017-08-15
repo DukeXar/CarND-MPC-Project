@@ -50,8 +50,8 @@ std::pair<double, double> GlobalToLocal(double x, double y, double x0,
                                         double y0, double psi) {
   double tx = x - x0;
   double ty = y - y0;
-  double lx = tx * cos(psi) - ty * sin(psi);
-  double ly = tx * sin(psi) + ty * cos(psi);
+  double lx = tx * cos(-psi) - ty * sin(-psi);
+  double ly = tx * sin(-psi) + ty * cos(-psi);
   return std::make_pair(lx, ly);
 }
 }  // namespace
@@ -69,14 +69,13 @@ void Navigator::Update(const std::vector<double>& ptsx,
                        double throttle) {
   // TODO(dukexar): Yes, it is silly to negate back, but we need to apply model
   // here.
-  psi = -psi;
-  steer = -steer;
+  // steer = -steer;
   // x_[t+1] = x[t] + v[t] * cos(psi[t]) * dt
   const double corrX = px + speed * cos(psi) * m_latency;
   // y_[t+1] = y[t] + v[t] * sin(psi[t]) * dt
   const double corrY = py + speed * sin(psi) * m_latency;
   // psi_[t+1] = psi[t] + v[t] / Lf * delta[t] * dt
-  const double corrPsi = psi - speed * steer / Lf * m_latency;
+  const double corrPsi = psi + speed * steer / Lf * m_latency;
   // Assume that speed does not change much in m_latency time, as otherwise
   // there is no simple way to convert the throttle into acceleration.
   // const double corrSpeed = speed + acc * m_latency;
@@ -93,7 +92,7 @@ void Navigator::Update(const std::vector<double>& ptsx,
   Eigen::VectorXd ptsyLocal(ptsy.size());
 
   for (int i = 0; i < ptsx.size(); ++i) {
-    const auto xy = GlobalToLocal(ptsx[i], ptsy[i], corrX, corrY, -corrPsi);
+    const auto xy = GlobalToLocal(ptsx[i], ptsy[i], corrX, corrY, corrPsi);
     ptsxLocal[i] = xy.first;
     ptsyLocal[i] = xy.second;
   }
@@ -127,12 +126,12 @@ std::vector<double> Navigator::GetNextXVals() const { return m_nextX; }
 std::vector<double> Navigator::GetNextYVals() const { return m_nextY; }
 
 double Navigator::GetSteerValue() const {
-  // return m_result.steer;
+  return m_result.steer;
   // return 0.1;
-  return 0;
+  // return 0;
 }
 
 double Navigator::GetThrottleValue() const {
-  // return m_result.acc;
-  return 0.5;
+  return m_result.acc;
+  // return 0.5;
 }

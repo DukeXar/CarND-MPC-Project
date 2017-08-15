@@ -42,7 +42,7 @@ int main() {
   // 2. Measurements are coming later than expected.
   // It means when solving the model, we need to shift every point by
   // 2*LATENCY.
-  const double LATENCY = 0;
+  const double LATENCY = 0.0;
 
   // These two values below seems optimal. Not ehough steps - car would try to
   // optimize for local position. too many steps - would hard to fit polynomial
@@ -97,7 +97,7 @@ int main() {
           const double steer = j[1]["steering_angle"];
           const double acc = j[1]["throttle"];
 
-          navigator.Update(ptsx, ptsy, px, py, -psi, v, -steer, acc);
+          navigator.Update(ptsx, ptsy, px, py, psi, v, -steer, acc);
 
           json msgJson;
           // NOTE: Remember to divide by deg2rad(25) before you send the
