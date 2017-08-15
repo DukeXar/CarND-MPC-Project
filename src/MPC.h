@@ -44,11 +44,14 @@ class MPC {
   // @param stepDt is time delta between steps, in seconds.
   // @param nSteps is number of steps to evaluate.
   // @param penalties is a value for pealties for the model.
-  MPC(double refV, double stepDt, size_t nSteps, const Penalties &penalties)
+  // @param latency is actuators and measurement latency.
+  MPC(double refV, double stepDt, size_t nSteps, const Penalties &penalties,
+      double latency)
       : m_refV(refV),
         m_stepDt(stepDt),
         m_nSteps(nSteps),
-        m_penalties(penalties) {}
+        m_penalties(penalties),
+        m_latency(latency) {}
 
   // Solve the model given an initial state and polynomial coefficients.
   Result Solve(Eigen::VectorXd state, Eigen::VectorXd coeffs);
@@ -58,6 +61,7 @@ class MPC {
   const double m_stepDt;
   const size_t m_nSteps;
   const Penalties m_penalties;
+  const double m_latency;
 };
 
 // Navigator is a wrapper over MPC that provides a shim between Udacity
@@ -65,11 +69,17 @@ class MPC {
 class Navigator {
  public:
   // Constructs navigator.
+  // @param refV is reference velocity.
+  // @param stepDt is time delta between steps, in seconds.
+  // @param nSteps is number of steps to evaluate.
+  // @param penalties is a value for pealties for the model.
+  // @param latency is actuators and measurement latency.
   Navigator(double refV, double stepDt, size_t nSteps,
-            const Penalties &penalties);
+            const Penalties &penalties, double latency);
 
   void Update(const std::vector<double> &ptsx, const std::vector<double> &ptsy,
-              double px, double py, double psi, double speed);
+              double px, double py, double psi, double speed, double steer,
+              double acc);
 
   std::vector<double> GetMpcXVals() const;
   std::vector<double> GetMpcYVals() const;
@@ -83,6 +93,7 @@ class Navigator {
   double m_stepDt;
   size_t m_nSteps;
   MPC m_mpc;
+  double m_latency;
   MPC::Result m_result;
   std::vector<double> m_nextX;
   std::vector<double> m_nextY;

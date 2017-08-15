@@ -150,16 +150,15 @@ class FG_eval {
   // Constructs a functor.
   // @param coeffs are 3rd-order polynomial coefficients of the target
   //               trajectory function.
-  // @param nSteps is number of steps to calculate into future.
-  // @param refV is a reference velocity of a car.
-  // @param stepDt is a time delta in seconds between steps.
+  // For other parameters see MPC.
   FG_eval(Eigen::VectorXd coeffs, size_t nSteps, double refV, double stepDt,
-          const Penalties& penalties)
+          const Penalties& penalties, double latency)
       : m_coeffs(coeffs),
         m_nSteps(nSteps),
         m_refV(refV),
         m_stepDt(stepDt),
-        m_penalties(penalties) {}
+        m_penalties(penalties),
+        m_latency(latency) {}
 
   // Interface for ipopt.
   // @param fg is a vector of the cost constraints.
@@ -209,6 +208,8 @@ class FG_eval {
     // Evaluate the model into m_nSteps in future.
 
     for (int t = 1; t < m_nSteps; ++t) {
+      const double dt = m_stepDt;
+
       auto view0 = GetView(vars, t - 1);
       auto view1 = GetView(vars, t);
       auto viewfg = GetView(fg, t + 1);
@@ -221,29 +222,27 @@ class FG_eval {
                       3 * m_coeffs[3] * view0.x() * view0.x());
 
       // x_[t+1] = x[t] + v[t] * cos(psi[t]) * dt
-      viewfg.x() = view1.x() -
-                   (view0.x() + view0.v() * CppAD::cos(view0.psi()) * m_stepDt);
+      viewfg.x() =
+          view1.x() - (view0.x() + view0.v() * CppAD::cos(view0.psi()) * dt);
 
       // y_[t+1] = y[t] + v[t] * sin(psi[t]) * dt
-      viewfg.y() = view1.y() -
-                   (view0.y() + view0.v() * CppAD::sin(view0.psi()) * m_stepDt);
+      viewfg.y() =
+          view1.y() - (view0.y() + view0.v() * CppAD::sin(view0.psi()) * dt);
 
       // psi_[t+1] = psi[t] + v[t] / Lf * delta[t] * dt
-      viewfg.psi() = view1.psi() -
-                     (view0.psi() + view0.v() * view0.steer() / Lf * m_stepDt);
+      viewfg.psi() =
+          view1.psi() - (view0.psi() + view0.v() * view0.steer() / Lf * dt);
 
       // v_[t+1] = v[t] + a[t] * dt
-      viewfg.v() = view1.v() - (view0.v() + view0.acc() * m_stepDt);
+      viewfg.v() = view1.v() - (view0.v() + view0.acc() * dt);
 
       // cte[t+1] = f(x[t]) - y[t] + v[t] * sin(epsi[t]) * dt
-      viewfg.cte() =
-          view1.cte() -
-          (f0 - view0.y() + view0.v() * CppAD::sin(view0.psie()) * m_stepDt);
+      viewfg.cte() = view1.cte() - (f0 - view0.y() +
+                                    view0.v() * CppAD::sin(view0.psie()) * dt);
 
       // epsi[t+1] = psi[t] - psides[t] + v[t] * delta[t] / Lf * dt
-      viewfg.psie() =
-          view1.psie() -
-          ((view0.psi() - psides0) + view0.v() * view0.steer() / Lf * m_stepDt);
+      viewfg.psie() = view1.psie() - ((view0.psi() - psides0) +
+                                      view0.v() * view0.steer() / Lf * dt);
     }
   }
 
@@ -253,6 +252,7 @@ class FG_eval {
   const double m_refV;
   const double m_stepDt;
   const Penalties m_penalties;
+  const double m_latency;
 };
 
 MPC::Result MPC::Solve(Eigen::VectorXd state, Eigen::VectorXd coeffs) {
@@ -339,7 +339,7 @@ MPC::Result MPC::Solve(Eigen::VectorXd state, Eigen::VectorXd coeffs) {
   */
 
   // object that computes objective and constraints
-  FG_eval fg_eval(coeffs, m_nSteps, m_refV, m_stepDt, m_penalties);
+  FG_eval fg_eval(coeffs, m_nSteps, m_refV, m_stepDt, m_penalties, m_latency);
 
   std::string options;
   // Uncomment this if you'd like more print information
@@ -381,21 +381,39 @@ MPC::Result MPC::Solve(Eigen::VectorXd state, Eigen::VectorXd coeffs) {
 }
 
 Navigator::Navigator(double refV, double stepDt, size_t nSteps,
-                     const Penalties& penalties)
+                     const Penalties& penalties, double latency)
     : m_stepDt(stepDt),
       m_nSteps(nSteps),
-      m_mpc(refV, stepDt, nSteps, penalties) {}
+      m_mpc(refV, stepDt, nSteps, penalties, latency),
+      m_latency(latency) {}
 
 void Navigator::Update(const std::vector<double>& ptsx,
                        const std::vector<double>& ptsy, double px, double py,
-                       double psi, double speed) {
+                       double psi, double speed, double steer, double acc) {
+  // TODO(dukexar): Yes, it is silly to negate back, but we need to apply model
+  // here.
+  psi = -psi;
+  steer = -steer;
+  // x_[t+1] = x[t] + v[t] * cos(psi[t]) * dt
+  const double corrX = px + speed * cos(psi) * m_latency;
+  // y_[t+1] = y[t] + v[t] * sin(psi[t]) * dt
+  const double corrY = py + speed * sin(psi) * m_latency;
+  // psi_[t+1] = psi[t] + v[t] / Lf * delta[t] * dt
+  const double corrPsi = psi + speed * steer / Lf * m_latency;
+  const double corrSpeed = speed + acc * m_latency;
+
+  std::cout << "Predicted corrX=" << corrX << std::endl;
+  std::cout << "Predicted corrY=" << corrY << std::endl;
+  std::cout << "Predicted corrPsi=" << corrPsi << std::endl;
+  std::cout << "Predicted corrSpeed=" << corrSpeed << std::endl;
+
   // Convert from global coorinate system to local (car's) one to simplify
   // further calculations.
   Eigen::VectorXd ptsxLocal(ptsx.size());
   Eigen::VectorXd ptsyLocal(ptsy.size());
 
   for (int i = 0; i < ptsx.size(); ++i) {
-    const auto xy = GlobalToLocal(ptsx[i], ptsy[i], px, py, psi);
+    const auto xy = GlobalToLocal(ptsx[i], ptsy[i], corrX, corrY, -corrPsi);
     ptsxLocal[i] = xy.first;
     ptsyLocal[i] = xy.second;
   }
@@ -407,7 +425,7 @@ void Navigator::Update(const std::vector<double>& ptsx,
   // psie = psi - angle at 0. psi in local coordinates is just 0
   const double psie = 0 - atan(PolyevalDeriv(coeffs, 0));
   Eigen::VectorXd state(N_STATE);
-  state << 0, 0, 0, speed, cte, psie;
+  state << 0, 0, 0, corrSpeed, cte, psie;
 
   m_result = m_mpc.Solve(state, coeffs);
 
@@ -415,7 +433,7 @@ void Navigator::Update(const std::vector<double>& ptsx,
   m_nextX = std::vector<double>(m_nSteps, 0);
   m_nextY = m_nextX;
   for (size_t i = 0; i < m_nextX.size(); ++i) {
-    m_nextX[i] = i * speed * m_stepDt;
+    m_nextX[i] = i * m_stepDt * 10;  // i * speed * m_stepDt;
     m_nextY[i] = Polyeval(coeffs, m_nextX[i]);
   }
 }
@@ -428,6 +446,12 @@ std::vector<double> Navigator::GetNextXVals() const { return m_nextX; }
 
 std::vector<double> Navigator::GetNextYVals() const { return m_nextY; }
 
-double Navigator::GetSteerValue() const { return m_result.steer; }
+double Navigator::GetSteerValue() const {
+  return m_result.steer;
+  // return 0.1;
+}
 
-double Navigator::GetThrottleValue() const { return m_result.acc; }
+double Navigator::GetThrottleValue() const {
+  return m_result.acc;
+  // return 0.5;
+}

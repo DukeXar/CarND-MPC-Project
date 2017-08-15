@@ -39,22 +39,47 @@ int main() {
 
   // Reference velocity.
   const double REF_V = 50;
-  // Time delta between steps.
-  const double STEP_DT = 0.1;
-  // Number of steps to model.
-  const size_t N_STEPS = 10;
 
-  // N_STEPS * STEP_DT = 1 (second) - this is how far in future model would
-  // look.
+  // Latency in seconds.
+  // TODO(dukexar): It seems latency is affecting from two sides:
+  // 1. Actuators are activated later.
+  // 2. Measurements are coming later than expected.
+  // It means when solving the model, we need to shift every point by
+  // 2*LATENCY.
+  const double LATENCY = 0.1;
+
+  // These two values below seems optimal. Not ehough steps - car would try to
+  // optimize for local position. too many steps - would hard to fit polynomial
+  // of 3rd order, so it would try to cut corners. This is also affected by
+  // latency. When activation and measurement is instant,
+  // it is easy to estimate far in future (higher N_STEPS), but when latency is
+  // effectively increasing the STEP_DT, it is better to not have that far
+  // horizon.
+
+  const double HORIZON = 1.0;
+  // Number of steps to model.
+  const size_t N_STEPS = 15;
+  // Time delta between steps.
+  // const double STEP_DT = HORIZON / N_STEPS - 2 * LATENCY;
+  const double STEP_DT = 0.1;
 
   Penalties penalties;
-  penalties.cte = 1500;
-  penalties.psie = 1500;
+  penalties.cte = 2000;
+  penalties.psie = 2000;
+  // Keeping speed is less important than careful driving.
+  penalties.v = 1;
 
-  Navigator navigator(REF_V, STEP_DT, N_STEPS, penalties);
+  penalties.steer = 5;
+  penalties.acc = 5;
 
-  h.onMessage([&navigator](uWS::WebSocket<uWS::SERVER> ws, char *data,
-                           size_t length, uWS::OpCode opCode) {
+  // Try to not do abrupt steering.
+  penalties.steer_gap = 1000;
+  penalties.acc_gap = 1;
+
+  Navigator navigator(REF_V, STEP_DT, N_STEPS, penalties, LATENCY);
+
+  h.onMessage([&navigator, &LATENCY](uWS::WebSocket<uWS::SERVER> ws, char *data,
+                                     size_t length, uWS::OpCode opCode) {
     // "42" at the start of the message means there's a websocket message event.
     // The 4 signifies a websocket message
     // The 2 signifies a websocket event
@@ -73,8 +98,10 @@ int main() {
           const double py = j[1]["y"];
           const double psi = j[1]["psi"];
           const double v = j[1]["speed"];
+          const double steer = j[1]["steering_angle"];
+          const double acc = j[1]["throttle"];
 
-          navigator.Update(ptsx, ptsy, px, py, -psi, v);
+          navigator.Update(ptsx, ptsy, px, py, -psi, v, -steer, acc);
 
           json msgJson;
           // NOTE: Remember to divide by deg2rad(25) before you send the
@@ -100,7 +127,7 @@ int main() {
           msgJson["next_y"] = navigator.GetNextYVals();
 
           const auto msg = "42[\"steer\"," + msgJson.dump() + "]";
-          // std::cout << msg << std::endl;
+          std::cout << msg << std::endl;
           // Latency
           // The purpose is to mimic real driving conditions where
           // the car does actuate the commands instantly.
@@ -110,7 +137,10 @@ int main() {
           //
           // NOTE: REMEMBER TO SET THIS TO 100 MILLISECONDS BEFORE
           // SUBMITTING.
-          // this_thread::sleep_for(chrono::milliseconds(100));
+          if (LATENCY) {
+            this_thread::sleep_for(
+                chrono::milliseconds(static_cast<int>(LATENCY * 1000)));
+          }
           ws.send(msg.data(), msg.length(), uWS::OpCode::TEXT);
         }
       } else {
