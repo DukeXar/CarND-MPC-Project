@@ -122,13 +122,6 @@ std::vector<double> Navigator::GetNextXVals() const { return m_nextX; }
 
 std::vector<double> Navigator::GetNextYVals() const { return m_nextY; }
 
-double Navigator::GetSteerValue() const {
-  return m_result.steer;
-  // return 0.1;
-  // return 0;
-}
+double Navigator::GetSteerValue() const { return m_result.steer; }
 
-double Navigator::GetThrottleValue() const {
-  return m_result.acc;
-  // return 0.5;
-}
+double Navigator::GetThrottleValue() const { return m_result.acc; }
