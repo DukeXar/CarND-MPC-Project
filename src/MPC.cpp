@@ -70,7 +70,7 @@ class FG_eval {
   }
 
  public:
-  typedef ADvector ADvector;
+  typedef CPPAD_TESTVECTOR(AD<double>) ADvector;
 
   // Constructs a functor.
   // @param coeffs are 3rd-order polynomial coefficients of the target
