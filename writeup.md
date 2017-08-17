@@ -103,4 +103,4 @@ The latency issue was described in the previous section about preprocessing.
 > No tire may leave the drivable portion of the track surface. The car may not pop up onto ledges or roll over any surfaces that would otherwise be considered unsafe (if humans were in the vehicle).
 > The car can't go over the curb, but, driving on the lines before the curb is ok.
 
-It does!
+[It does!](https://youtu.be/PPJY2pJM9-g)
